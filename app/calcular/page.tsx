@@ -1,4 +1,5 @@
 'use client';
+
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useConfig } from '@/store/config';
@@ -24,7 +25,7 @@ import {
   type CenarioTransito,
   type RotaCompleta,
 } from '@/lib/rotas';
-import type { EntradaServico } from '@/types';
+import type { EntradaServico, ResultadoServico } from '@/types';
 import { CampoEndereco } from '@/components/CampoEndereco';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -41,9 +42,19 @@ import {
   Check,
   Fuel,
   Clock,
+  RotateCcw,
+  Wallet,
 } from 'lucide-react';
 
 const ESPERA_POR_PASSAGEIRO_MIN = 10;
+
+/** Normaliza "1.200,50", "1200,50" e "1200.50" para número */
+function parseNum(s: string): number {
+  if (!s) return 0;
+  const limpo = s.replace(/\./g, '').replace(',', '.');
+  const n = Number(limpo);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
 
 function Linha({
   label,
@@ -81,39 +92,33 @@ export default function CalcularPage() {
 
   // Guard de hidratação: evita mismatch entre SSR e client
   const [montado, setMontado] = useState(false);
-
   const [atual, setAtual] = useState<Ponto | null>(null);
   const [buscandoGps, setBuscandoGps] = useState(false);
-
   const [embarque, setEmbarque] = useState('');
   const [destino, setDestino] = useState('');
   const [retorno, setRetorno] = useState('');
-
   const [pontoEmb, setPontoEmb] = useState<Ponto | null>(null);
   const [pontoDest, setPontoDest] = useState<Ponto | null>(null);
   const [pontoRet, setPontoRet] = useState<Ponto | null>(null);
-
   const [passageiros, setPassageiros] = useState('1');
   const [horasServico, setHorasServico] = useState('1.20');
   const [horasEspera, setHorasEspera] = useState('0.30');
   const [pedagio, setPedagio] = useState('0');
   const [estacionamento, setEstacionamento] = useState('0');
-
   // 'normal' é o valor neutro; o horário real é lido no client (useEffect abaixo)
   const [cenario, setCenario] = useState<CenarioTransito>('normal');
-
   const [calculando, setCalculando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
-  const [resultado, setResultado] = useState<any>(null);
+  const [resultado, setResultado] = useState<ResultadoServico | null>(null);
   const [rotaInfo, setRotaInfo] = useState<any>(null);
-
   const [previaRota, setPreviaRota] = useState<RotaCompleta | null>(null);
   const [calculandoPrevia, setCalculandoPrevia] = useState(false);
-
   const [horasAuto, setHorasAuto] = useState(false);
   const [clienteId, setClienteId] = useState('');
   const [servicoSalvo, setServicoSalvo] = useState(false);
   const [salvandoServico, setSalvandoServico] = useState(false);
+  // Valor manual que o Rodrigo decide cobrar (serviços exclusivos)
+  const [valorManual, setValorManual] = useState('');
 
   const top5 = useMemo(() => maisUsados(5), [maisUsados]);
 
@@ -149,10 +154,8 @@ export default function CalcularPage() {
       setPreviaRota(null);
       return;
     }
-
     let cancelado = false;
     setCalculandoPrevia(true);
-
     calcularRotaCompleta(
       {
         atual: atual!,
@@ -165,12 +168,10 @@ export default function CalcularPage() {
       .then((rota) => {
         if (cancelado) return;
         setPreviaRota(rota);
-
         const horasServicoCalc = rota.segundosComMargem / 3600;
         const qtd = Math.max(1, Number(passageiros) || 1);
         const minutosEspera = ESPERA_POR_PASSAGEIRO_MIN * qtd * 2;
         const horasEsperaCalc = minutosEspera / 60;
-
         setHorasServico(Math.max(horasServicoCalc, 0.05).toFixed(2));
         setHorasEspera(horasEsperaCalc.toFixed(2));
         setHorasAuto(true);
@@ -181,35 +182,48 @@ export default function CalcularPage() {
       .finally(() => {
         if (!cancelado) setCalculandoPrevia(false);
       });
-
     return () => {
       cancelado = true;
     };
   }, [atual, pontoEmb, pontoDest, pontoRet, cenario, pontosProntos, passageiros]);
+
+  /**
+   * Monta a EntradaServico a partir dos mesmos valores usados no cálculo.
+   * Fonte única de verdade — evita divergência entre cálculo e recálculo.
+   */
+  const montarEntrada = (segundosComMargem: number): EntradaServico => ({
+    kmServico: rotaInfo?.rota?.kmTotal ?? 0,
+    kmAteEmbarque: 0,
+    kmRetornoBase: 0,
+    horasServico: Number(horasServico) || 0,
+    horasEspera: Number(horasEspera) || 0,
+    horasDeslocamento: segundosComMargem / 3600,
+    pedagio: parseNum(pedagio),
+    estacionamento: parseNum(estacionamento),
+    agenciaPercentual: 0,
+  });
 
   const calcular = async () => {
     setErro(null);
     setResultado(null);
     setRotaInfo(null);
     setServicoSalvo(false);
+    setValorManual('');
 
     if (!veiculoValido) {
       setErro('Cadastre o veículo e o valor FIPE antes de calcular.');
       return;
     }
-
     if (!atual) {
       setErro('Toque em "Usar minha localização" primeiro.');
       return;
     }
-
     if (!embarque.trim() || !destino.trim() || !retorno.trim()) {
       setErro('Preencha embarque, destino e retorno.');
       return;
     }
 
     setCalculando(true);
-
     try {
       const [pEmb, pDest, pRet] = await Promise.all([
         pontoEmb ?? geocodificar(embarque),
@@ -229,8 +243,8 @@ export default function CalcularPage() {
         horasServico: Number(horasServico) || 0,
         horasEspera: Number(horasEspera) || 0,
         horasDeslocamento: rota.segundosComMargem / 3600,
-        pedagio: Number(pedagio) || 0,
-        estacionamento: Number(estacionamento) || 0,
+        pedagio: parseNum(pedagio),
+        estacionamento: parseNum(estacionamento),
         agenciaPercentual: 0,
       };
 
@@ -246,9 +260,65 @@ export default function CalcularPage() {
     }
   };
 
+  /** Aplica o valor manual e devolve lucro/margem recalculados na hora */
+  const aplicarValorManual = (texto: string) => {
+    setValorManual(texto);
+    setServicoSalvo(false);
+    const n = parseNum(texto);
+    if (!rotaInfo || !resultado) return;
+
+    // Base de comparação imutável: o custo total do cálculo original
+    const entrada = {
+      kmServico: rotaInfo.rota.kmTotal,
+      kmAteEmbarque: 0,
+      kmRetornoBase: 0,
+      horasServico: Number(horasServico) || 0,
+      horasEspera: Number(horasEspera) || 0,
+      horasDeslocamento: rotaInfo.rota.segundosComMargem / 3600,
+      pedagio: parseNum(pedagio),
+      estacionamento: parseNum(estacionamento),
+      agenciaPercentual: 0,
+    };
+
+    setResultado(
+      calcularServico(
+        entrada,
+        veiculo,
+        fixos,
+        variaveis,
+        config,
+        n > 0 ? n : undefined,
+      ),
+    );
+  };
+
+  /** Limpa o valor manual e volta ao preço sugerido */
+  const limparValorManual = () => {
+    setValorManual('');
+    setServicoSalvo(false);
+    if (!rotaInfo) return;
+
+    const entrada = {
+      kmServico: rotaInfo.rota.kmTotal,
+      kmAteEmbarque: 0,
+      kmRetornoBase: 0,
+      horasServico: Number(horasServico) || 0,
+      horasEspera: Number(horasEspera) || 0,
+      horasDeslocamento: rotaInfo.rota.segundosComMargem / 3600,
+      pedagio: parseNum(pedagio),
+      estacionamento: parseNum(estacionamento),
+      agenciaPercentual: 0,
+    };
+
+    setResultado(calcularServico(entrada, veiculo, fixos, variaveis, config));
+  };
+
   const salvarNoHistorico = async () => {
     if (!resultado || !rotaInfo) return;
     setSalvandoServico(true);
+
+    const manual = parseNum(valorManual);
+    const precoFinal = manual > 0 ? manual : resultado.precoComercial;
 
     const id = await salvarServico({
       cliente_id: clienteId || null,
@@ -266,11 +336,11 @@ export default function CalcularPage() {
       horas_espera: Number(horasEspera) || 0,
       cenario_transito: cenario,
       custo_total: resultado.custoTotal,
-      preco_cobrado: resultado.precoComercial,
+      preco_cobrado: precoFinal,
       lucro: resultado.lucro,
       margem: resultado.margemEfetiva,
-      pedagio: Number(pedagio) || 0,
-      estacionamento: Number(estacionamento) || 0,
+      pedagio: parseNum(pedagio),
+      estacionamento: parseNum(estacionamento),
       observacoes: null,
     });
 
@@ -297,6 +367,15 @@ export default function CalcularPage() {
   const horasServicoNum = Number(horasServico) || 0;
   const horasEsperaNum = Number(horasEspera) || 0;
   const horasTotal = horasServicoNum + horasEsperaNum;
+
+  const valorManualNum = parseNum(valorManual);
+  const temManual = valorManualNum > 0;
+  const abaixoDoCusto = temManual && resultado && valorManualNum < resultado.custoTotal;
+  const abaixoDaMeta =
+    temManual &&
+    resultado &&
+    valorManualNum >= resultado.custoTotal &&
+    resultado.margemEfetiva < config.metaMargem;
 
   return (
     <div className="space-y-4">
@@ -464,7 +543,6 @@ export default function CalcularPage() {
               onChange={(e) => setPassageiros(e.target.value)}
             />
           </div>
-
           <div>
             <Label className="text-xs">Pedágio (R$)</Label>
             <Input
@@ -473,7 +551,6 @@ export default function CalcularPage() {
               onChange={(e) => setPedagio(e.target.value)}
             />
           </div>
-
           <div>
             <Label className="text-xs">Horas do serviço</Label>
             <Input
@@ -488,7 +565,6 @@ export default function CalcularPage() {
               {horasParaTexto(horasServicoNum)}
             </p>
           </div>
-
           <div>
             <Label className="text-xs">Horas de espera</Label>
             <Input
@@ -503,7 +579,6 @@ export default function CalcularPage() {
               {horasParaTexto(horasEsperaNum)}
             </p>
           </div>
-
           <div className="col-span-2">
             <Label className="text-xs">Estacionamento (R$)</Label>
             <Input
@@ -512,7 +587,6 @@ export default function CalcularPage() {
               onChange={(e) => setEstacionamento(e.target.value)}
             />
           </div>
-
           {horasAuto && (
             <p className="col-span-2 text-[11px] text-muted-foreground">
               Horas calculadas pela rota ({passageiros} passageiro
@@ -700,6 +774,106 @@ export default function CalcularPage() {
               />
               <div className="flex items-center justify-between pt-1">
                 <span className="text-muted-foreground">Margem</span>
+                <Badge
+                  variant={
+                    resultado.margemEfetiva >= config.metaMargem
+                      ? 'default'
+                      : 'destructive'
+                  }
+                >
+                  {(resultado.margemEfetiva * 100).toFixed(1)}%
+                </Badge>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* ===== VALOR MANUAL — SERVIÇO EXCLUSIVO ===== */}
+          <Card
+            className={
+              abaixoDoCusto
+                ? 'border-destructive/50'
+                : 'border-primary/40'
+            }
+          >
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Wallet className="h-4 w-4" /> Valor que vou cobrar
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <p className="text-[11px] text-muted-foreground">
+                Opcional — para serviços exclusivos com preço diferenciado.
+                Deixe vazio para usar o preço sugerido.
+              </p>
+
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-muted-foreground">
+                  R$
+                </span>
+                <Input
+                  inputMode="decimal"
+                  value={valorManual}
+                  onChange={(e) => aplicarValorManual(e.target.value)}
+                  placeholder={resultado.precoComercial
+                    .toFixed(2)
+                    .replace('.', ',')}
+                  className="text-lg font-bold"
+                />
+                {temManual && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 shrink-0"
+                    onClick={limparValorManual}
+                    title="Voltar ao preço sugerido"
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+
+              {abaixoDoCusto && (
+                <div className="rounded-md border border-destructive/50 bg-destructive/10 p-2">
+                  <p className="text-[11px] font-medium text-destructive">
+                    Abaixo do custo — prejuízo de{' '}
+                    {brl(resultado.custoTotal - valorManualNum)}
+                  </p>
+                </div>
+              )}
+
+              {abaixoDaMeta && (
+                <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-2">
+                  <p className="text-[11px] font-medium text-amber-600">
+                    Lucro positivo, mas abaixo da meta de{' '}
+                    {(config.metaMargem * 100).toFixed(0)}%
+                  </p>
+                </div>
+              )}
+
+              {temManual && !abaixoDoCusto && !abaixoDaMeta && (
+                <div className="rounded-md border border-green-600/40 bg-green-600/10 p-2">
+                  <p className="text-[11px] font-medium text-green-700">
+                    Acima da meta de {(config.metaMargem * 100).toFixed(0)}%
+                  </p>
+                </div>
+              )}
+
+              <Separator className="my-1" />
+
+              <Linha
+                label={temManual ? 'Cobrando' : 'Preço sugerido'}
+                valor={brl(
+                  temManual ? valorManualNum : resultado.precoComercial,
+                )}
+                destaque
+              />
+              <Linha
+                label="Lucro"
+                valor={brl(resultado.lucro)}
+                destaque
+              />
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Margem real</span>
                 <Badge
                   variant={
                     resultado.margemEfetiva >= config.metaMargem
