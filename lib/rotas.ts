@@ -189,6 +189,31 @@ export function linkWaze(destino: Ponto, partida?: Ponto): string {
   return `https://waze.com/ul?ll=${ll}&navigate=yes`;
 }
 
+/**
+ * Trajeto completo no Google Maps, com todas as paradas.
+ * Ordem: base → embarque → destino → retorno.
+ * O Google Maps aceita até 9 waypoints no deep link.
+ */
+export function linkGoogleMapsTrajeto(pontos: {
+  atual: Ponto;
+  embarque: Ponto;
+  destino: Ponto;
+  retorno: Ponto;
+}): string {
+  const coord = (p: Ponto) => `${p.lat},${p.lon}`;
+  const origin = coord(pontos.atual);
+  const destination = coord(pontos.retorno);
+  const waypoints = [coord(pontos.embarque), coord(pontos.destino)].join('|');
+
+  return (
+    `https://www.google.com/maps/dir/?api=1` +
+    `&origin=${origin}` +
+    `&destination=${destination}` +
+    `&waypoints=${waypoints}` +
+    `&travelmode=driving`
+  );
+}
+
 /** Formata segundos como "1h 25min" */
 export function formatarDuracao(segundos: number): string {
   const min = Math.round(segundos / 60);

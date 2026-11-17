@@ -18,6 +18,7 @@ import {
   geocodificar,
   calcularRotaCompleta,
   linkWaze,
+  linkGoogleMapsTrajeto,
   formatarDuracao,
   cenarioPorHorario,
   FATORES_TRANSITO,
@@ -45,6 +46,7 @@ import {
   RotateCcw,
   Wallet,
   Route,
+  MapPin,
 } from 'lucide-react';
 
 const ESPERA_POR_PASSAGEIRO_MIN = 10;
@@ -327,9 +329,22 @@ export default function CalcularPage() {
     if (id) setServicoSalvo(true);
   };
 
+  /** Waze vai até o embarque (primeira perna do trajeto) */
   const abrirWaze = () => {
     if (!rotaInfo || !atual) return;
-    const url = linkWaze(rotaInfo.pDest, atual);
+    const url = linkWaze(rotaInfo.pEmb ?? rotaInfo.pDest, atual);
+    window.open(url, '_blank');
+  };
+
+  /** Google Maps com o trajeto completo: base → embarque → destino → retorno */
+  const abrirTrajetoCompleto = () => {
+    if (!rotaInfo || !atual) return;
+    const url = linkGoogleMapsTrajeto({
+      atual,
+      embarque: rotaInfo.pEmb,
+      destino: rotaInfo.pDest,
+      retorno: rotaInfo.pRet,
+    });
     window.open(url, '_blank');
   };
 
@@ -912,12 +927,35 @@ export default function CalcularPage() {
             )}
           </Button>
 
-          <Button
-            onClick={abrirWaze}
-            className="h-12 w-full bg-[#33ccff] text-base text-black hover:bg-[#29b3e0]"
-          >
-            <Navigation className="mr-2 h-4 w-4" /> Abrir no Waze
-          </Button>
+          {/* ===== NAVEGAÇÃO ===== */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Navigation className="h-4 w-4" /> Navegar
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Button
+                onClick={abrirWaze}
+                className="h-12 w-full bg-[#33ccff] text-base text-black hover:bg-[#29b3e0]"
+              >
+                <Navigation className="mr-2 h-4 w-4" /> Waze até o embarque
+              </Button>
+
+              <Button
+                onClick={abrirTrajetoCompleto}
+                variant="outline"
+                className="h-12 w-full text-base"
+              >
+                <MapPin className="mr-2 h-4 w-4" /> Trajeto completo (Maps)
+              </Button>
+
+              <p className="text-[11px] text-muted-foreground">
+                O Waze traz apenas o próximo ponto (embarque). O Maps abre o
+                trajeto todo: base → embarque → destino → retorno.
+              </p>
+            </CardContent>
+          </Card>
         </>
       )}
     </div>
