@@ -44,6 +44,7 @@ import {
   Clock,
   RotateCcw,
   Wallet,
+  Route,
 } from 'lucide-react';
 
 const ESPERA_POR_PASSAGEIRO_MIN = 10;
@@ -168,7 +169,10 @@ export default function CalcularPage() {
       .then((rota) => {
         if (cancelado) return;
         setPreviaRota(rota);
-        const horasServicoCalc = rota.segundosComMargem / 3600;
+        // Só o trecho do SERVIÇO (embarque → destino) entra nas horas de serviço.
+        // Ida até o embarque e volta ao retorno entram em horasDeslocamento.
+        const servicoSeg = rota.trechos[1]?.segundosComMargem ?? 0;
+        const horasServicoCalc = servicoSeg / 3600;
         const qtd = Math.max(1, Number(passageiros) || 1);
         const minutosEspera = ESPERA_POR_PASSAGEIRO_MIN * qtd * 2;
         const horasEsperaCalc = minutosEspera / 60;
@@ -188,20 +192,30 @@ export default function CalcularPage() {
   }, [atual, pontoEmb, pontoDest, pontoRet, cenario, pontosProntos, passageiros]);
 
   /**
-   * Monta a EntradaServico a partir dos mesmos valores usados no cálculo.
-   * Fonte única de verdade — evita divergência entre cálculo e recálculo.
+   * Monta a EntradaServico com os TRÊS trechos separados.
+   * kmTotais() soma kmAteEmbarque + kmServico + kmRetornoBase → trajeto completo.
+   * horasTotais() soma horasServico + horasEspera + horasDeslocamento → sem duplicar.
    */
-  const montarEntrada = (segundosComMargem: number): EntradaServico => ({
-    kmServico: rotaInfo?.rota?.kmTotal ?? 0,
-    kmAteEmbarque: 0,
-    kmRetornoBase: 0,
-    horasServico: Number(horasServico) || 0,
-    horasEspera: Number(horasEspera) || 0,
-    horasDeslocamento: segundosComMargem / 3600,
-    pedagio: parseNum(pedagio),
-    estacionamento: parseNum(estacionamento),
-    agenciaPercentual: 0,
-  });
+  const montarEntrada = (rota: RotaCompleta): EntradaServico => {
+    const ida = rota.trechos[0];
+    const servico = rota.trechos[1];
+    const volta = rota.trechos[2];
+
+    const segDeslocamento =
+      (ida?.segundosComMargem ?? 0) + (volta?.segundosComMargem ?? 0);
+
+    return {
+      kmAteEmbarque: ida?.km ?? 0,
+      kmServico: servico?.km ?? 0,
+      kmRetornoBase: volta?.km ?? 0,
+      horasServico: Number(horasServico) || 0,
+      horasEspera: Number(horasEspera) || 0,
+      horasDeslocamento: segDeslocamento / 3600,
+      pedagio: parseNum(pedagio),
+      estacionamento: parseNum(estacionamento),
+      agenciaPercentual: 0,
+    };
+  };
 
   const calcular = async () => {
     setErro(null);
@@ -236,18 +250,7 @@ export default function CalcularPage() {
         cenario,
       );
 
-      const entrada: EntradaServico = {
-        kmServico: rota.kmTotal,
-        kmAteEmbarque: 0,
-        kmRetornoBase: 0,
-        horasServico: Number(horasServico) || 0,
-        horasEspera: Number(horasEspera) || 0,
-        horasDeslocamento: rota.segundosComMargem / 3600,
-        pedagio: parseNum(pedagio),
-        estacionamento: parseNum(estacionamento),
-        agenciaPercentual: 0,
-      };
-
+      const entrada = montarEntrada(rota);
       const res = calcularServico(entrada, veiculo, fixos, variaveis, config);
 
       setRotaInfo({ rota, pEmb, pDest, pRet });
@@ -264,22 +267,10 @@ export default function CalcularPage() {
   const aplicarValorManual = (texto: string) => {
     setValorManual(texto);
     setServicoSalvo(false);
+    if (!rotaInfo) return;
+
     const n = parseNum(texto);
-    if (!rotaInfo || !resultado) return;
-
-    // Base de comparação imutável: o custo total do cálculo original
-    const entrada = {
-      kmServico: rotaInfo.rota.kmTotal,
-      kmAteEmbarque: 0,
-      kmRetornoBase: 0,
-      horasServico: Number(horasServico) || 0,
-      horasEspera: Number(horasEspera) || 0,
-      horasDeslocamento: rotaInfo.rota.segundosComMargem / 3600,
-      pedagio: parseNum(pedagio),
-      estacionamento: parseNum(estacionamento),
-      agenciaPercentual: 0,
-    };
-
+    const entrada = montarEntrada(rotaInfo.rota);
     setResultado(
       calcularServico(
         entrada,
@@ -297,19 +288,7 @@ export default function CalcularPage() {
     setValorManual('');
     setServicoSalvo(false);
     if (!rotaInfo) return;
-
-    const entrada = {
-      kmServico: rotaInfo.rota.kmTotal,
-      kmAteEmbarque: 0,
-      kmRetornoBase: 0,
-      horasServico: Number(horasServico) || 0,
-      horasEspera: Number(horasEspera) || 0,
-      horasDeslocamento: rotaInfo.rota.segundosComMargem / 3600,
-      pedagio: parseNum(pedagio),
-      estacionamento: parseNum(estacionamento),
-      agenciaPercentual: 0,
-    };
-
+    const entrada = montarEntrada(rotaInfo.rota);
     setResultado(calcularServico(entrada, veiculo, fixos, variaveis, config));
   };
 
@@ -368,9 +347,19 @@ export default function CalcularPage() {
   const horasEsperaNum = Number(horasEspera) || 0;
   const horasTotal = horasServicoNum + horasEsperaNum;
 
+  // Trechos para exibição
+  const trechos = rotaInfo?.rota?.trechos ?? [];
+  const kmIda = trechos[0]?.km ?? 0;
+  const kmServicoT = trechos[1]?.km ?? 0;
+  const kmVolta = trechos[2]?.km ?? 0;
+  const segDesloc =
+    (trechos[0]?.segundosComMargem ?? 0) +
+    (trechos[2]?.segundosComMargem ?? 0);
+
   const valorManualNum = parseNum(valorManual);
   const temManual = valorManualNum > 0;
-  const abaixoDoCusto = temManual && resultado && valorManualNum < resultado.custoTotal;
+  const abaixoDoCusto =
+    temManual && resultado && valorManualNum < resultado.custoTotal;
   const abaixoDaMeta =
     temManual &&
     resultado &&
@@ -382,7 +371,7 @@ export default function CalcularPage() {
       <div>
         <h1 className="text-2xl font-bold">Calcular serviço</h1>
         <p className="text-sm text-muted-foreground">
-          Preencha os pontos e o app busca a rota
+          Preencha os pontos e o app calcula o trajeto completo
         </p>
       </div>
 
@@ -467,7 +456,6 @@ export default function CalcularPage() {
           <CardTitle className="text-base">4. Retorno</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
-          {/* Guard de hidratação: só renderiza depois de montar no client */}
           {montado && top5.length > 0 && (
             <div className="space-y-1">
               <p className="text-xs text-muted-foreground">Mais usados</p>
@@ -507,14 +495,18 @@ export default function CalcularPage() {
       {previaRota && !calculandoPrevia && (
         <div className="rounded-md border border-primary/40 bg-primary/5 p-3 text-sm">
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Rota encontrada</span>
+            <span className="text-muted-foreground">Trajeto total</span>
             <span className="font-semibold">
               {previaRota.kmTotal} km ·{' '}
               {formatarDuracao(previaRota.segundosComMargem)}
             </span>
           </div>
           <div className="mt-1 flex justify-between text-xs text-muted-foreground">
-            <span>Combustível previsto</span>
+            <span>
+              Ida {previaRota.trechos[0]?.km ?? 0} km · Serviço{' '}
+              {previaRota.trechos[1]?.km ?? 0} km · Volta{' '}
+              {previaRota.trechos[2]?.km ?? 0} km
+            </span>
             <span>
               {litrosDaViagem(previaRota.kmTotal, veiculo).toFixed(1)} L ·{' '}
               {brl(custoCombustivelViagem(previaRota.kmTotal, veiculo, config))}
@@ -589,9 +581,11 @@ export default function CalcularPage() {
           </div>
           {horasAuto && (
             <p className="col-span-2 text-[11px] text-muted-foreground">
-              Horas calculadas pela rota ({passageiros} passageiro
+              Horas do serviço = só o trecho embarque → destino. A ida até o
+              embarque e a volta ao retorno entram como deslocamento. Espera
+              calculada com {passageiros} passageiro
               {Number(passageiros) > 1 ? 's' : ''} ×{' '}
-              {ESPERA_POR_PASSAGEIRO_MIN} min por parada). Pedágio e
+              {ESPERA_POR_PASSAGEIRO_MIN} min por parada. Pedágio e
               estacionamento são seus — a rota gratuita não informa esses
               valores.
             </p>
@@ -677,25 +671,37 @@ export default function CalcularPage() {
         <>
           <Card className="border-primary/40">
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Trajeto</CardTitle>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Route className="h-4 w-4" /> Trajeto total
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-1 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Distância</span>
-                <span className="font-semibold">
-                  {rotaInfo.rota.kmTotal} km
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Tempo estimado</span>
-                <span className="font-semibold">
-                  {formatarDuracao(rotaInfo.rota.segundosComMargem)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Cenário</span>
-                <span>{FATORES_TRANSITO[cenario].label}</span>
-              </div>
+              <Linha
+                label="Ida até o embarque"
+                valor={`${kmIda.toFixed(1)} km`}
+              />
+              <Linha
+                label="Serviço (embarque → destino)"
+                valor={`${kmServicoT.toFixed(1)} km`}
+              />
+              <Linha
+                label="Volta ao retorno"
+                valor={`${kmVolta.toFixed(1)} km`}
+              />
+              <Separator className="my-2" />
+              <Linha
+                label="Distância total"
+                valor={`${rotaInfo.rota.kmTotal} km`}
+                destaque
+              />
+              <Linha
+                label="Tempo de deslocamento"
+                valor={horasParaTexto(segDesloc / 3600)}
+              />
+              <Linha
+                label="Cenário"
+                valor={FATORES_TRANSITO[cenario].label}
+              />
             </CardContent>
           </Card>
 
@@ -733,17 +739,21 @@ export default function CalcularPage() {
             </CardHeader>
             <CardContent className="space-y-1 text-sm">
               <Linha
-                label="Trajeto (rota)"
+                label="Trajeto (embarque → destino)"
                 valor={horasParaTexto(horasServicoNum)}
               />
               <Linha
                 label="Espera nos passageiros"
                 valor={horasParaTexto(horasEsperaNum)}
               />
+              <Linha
+                label="Deslocamento (ida + volta)"
+                valor={horasParaTexto(segDesloc / 3600)}
+              />
               <Separator className="my-2" />
               <Linha
-                label="Total cobrado em tempo"
-                valor={horasParaTexto(horasTotal)}
+                label="Total do serviço"
+                valor={horasParaTexto(horasTotal + segDesloc / 3600)}
                 destaque
               />
             </CardContent>
@@ -790,9 +800,7 @@ export default function CalcularPage() {
           {/* ===== VALOR MANUAL — SERVIÇO EXCLUSIVO ===== */}
           <Card
             className={
-              abaixoDoCusto
-                ? 'border-destructive/50'
-                : 'border-primary/40'
+              abaixoDoCusto ? 'border-destructive/50' : 'border-primary/40'
             }
           >
             <CardHeader className="pb-2">
@@ -867,11 +875,7 @@ export default function CalcularPage() {
                 )}
                 destaque
               />
-              <Linha
-                label="Lucro"
-                valor={brl(resultado.lucro)}
-                destaque
-              />
+              <Linha label="Lucro" valor={brl(resultado.lucro)} destaque />
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Margem real</span>
                 <Badge

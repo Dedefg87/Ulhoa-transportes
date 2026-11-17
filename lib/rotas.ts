@@ -10,6 +10,8 @@ export type Ponto = {
 export type RotaTrecho = {
   km: number;
   segundos: number;
+  /** Segundos com o fator de trânsito já aplicado */
+  segundosComMargem: number;
 };
 
 export type RotaCompleta = {
@@ -65,8 +67,6 @@ export const FATORES_TRANSITO: Record<
  * Usar `new Date()` como valor padrão faz o Next 16 avaliar a data durante o
  * prerender do servidor, o que dispara o erro:
  * "Next.js encountered the unstable value `new Date()`".
- * Resolvendo a data dentro do corpo, ela só é lida quando a função é
- * efetivamente chamada no navegador.
  */
 export function cenarioPorHorario(agora?: Date): CenarioTransito {
   const h = (agora ?? new Date()).getHours();
@@ -142,9 +142,13 @@ async function rotaEntre(a: Ponto, b: Ponto): Promise<RotaTrecho> {
     throw new Error('Nenhuma rota encontrada entre os pontos.');
   }
 
+  const km = dados.routes[0].distance / 1000;
+  const segundos = dados.routes[0].duration;
+
   return {
-    km: dados.routes[0].distance / 1000,
-    segundos: dados.routes[0].duration,
+    km,
+    segundos,
+    segundosComMargem: segundos,
   };
 }
 
@@ -171,6 +175,7 @@ export async function calcularRotaCompleta(
     trechos: trechos.map((t) => ({
       km: Math.round(t.km * 10) / 10,
       segundos: Math.round(t.segundos),
+      segundosComMargem: Math.round(t.segundos * fator),
     })),
   };
 }
