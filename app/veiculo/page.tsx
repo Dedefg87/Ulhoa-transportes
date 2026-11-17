@@ -43,6 +43,9 @@ const CATEGORIAS: CategoriaVeiculo[] = [
   'Executivo',
 ];
 
+/** Fator de rendimento do etanol em relação à gasolina */
+const FATOR_ETANOL = 0.7;
+
 export default function VeiculoPage() {
   const { veiculos, ativoId, adicionar, atualizar, remover, definirAtivo } =
     useVeiculos();
@@ -62,10 +65,12 @@ export default function VeiculoPage() {
   const [marcaCodigo, setMarcaCodigo] = useState('');
   const [modeloCodigo, setModeloCodigo] = useState('');
   const [anoCodigo, setAnoCodigo] = useState('');
+
   const [apelido, setApelido] = useState('');
   const [categoria, setCategoria] = useState<CategoriaVeiculo>('Executivo');
   const [valorFipe, setValorFipe] = useState('');
   const [consumo, setConsumo] = useState('');
+  const [consumoEtanol, setConsumoEtanol] = useState('');
   const [consumoEstimado, setConsumoEstimado] = useState(true);
   const [kmPorMes, setKmPorMes] = useState('3000');
   const [valorRevenda, setValorRevenda] = useState('');
@@ -107,11 +112,12 @@ export default function VeiculoPage() {
     const modelo = modelos.find((m) => m.codigo === codigo);
     setModeloNome(modelo?.nome ?? '');
     if (!codigo) return;
-
     const est = estimarConsumo(modelo?.nome ?? '', categoria, combustivel);
     setConsumo(String(est.kmPorLitro).replace('.', ','));
+    setConsumoEtanol(
+      String((est.kmPorLitro * FATOR_ETANOL).toFixed(1)).replace('.', ','),
+    );
     setConsumoEstimado(true);
-
     setCarregandoAnos(true);
     try {
       setAnos(await listarAnos(marcaCodigo, codigo));
@@ -125,25 +131,23 @@ export default function VeiculoPage() {
   const escolherAno = async (codigo: string) => {
     setAnoCodigo(codigo);
     if (!codigo) return;
-
     const ano = anos.find((a) => a.codigo === codigo);
     const numAno = Number(ano?.nome?.match(/\d{4}/)?.[0] ?? 0);
     setAnoNumero(numAno || null);
-
     setConsultando(true);
     try {
       const valor = await consultarValor(marcaCodigo, modeloCodigo, codigo);
       const preco = precoFipeParaNumero(valor.valor);
       setValorFipe(String(preco));
       setValorRevenda(String(Math.round(preco * 0.75)));
-
       const comb = normalizarCombustivel(valor.combustivel);
       setCombustivel(comb);
-
       const est = estimarConsumo(modeloNome, categoria, comb);
       setConsumo(String(est.kmPorLitro).replace('.', ','));
+      setConsumoEtanol(
+        String((est.kmPorLitro * FATOR_ETANOL).toFixed(1)).replace('.', ','),
+      );
       setConsumoEstimado(true);
-
       if (!apelido) {
         setApelido(`${modeloNome.split(' ')[0]} ${numAno || ''}`.trim());
       }
@@ -161,16 +165,22 @@ export default function VeiculoPage() {
     setApelido('');
     setValorFipe('');
     setConsumo('');
+    setConsumoEtanol('');
     setValorRevenda('');
     setKmPorMes('3000');
     setModeloNome('');
     setAnoNumero(null);
     setEditandoId(null);
     setErroFipe(null);
+    setConsumoEstimado(true);
   };
 
   const salvar = () => {
     const num = (s: string) => Number(s.replace(',', '.')) || 0;
+
+    // Só guarda o consumo de etanol quando o carro aceita etanol
+    const aceitaEtanol = combustivel === 'Flex' || combustivel === 'Etanol';
+    const etanolNum = aceitaEtanol ? num(consumoEtanol) : 0;
 
     if (!editandoId) {
       adicionar({
@@ -181,6 +191,7 @@ export default function VeiculoPage() {
         versao: modeloNome,
         combustivel,
         consumo: num(consumo),
+        consumoEtanol: etanolNum > 0 ? etanolNum : undefined,
         valorFipe: num(valorFipe),
         valorRevendaEsperado:
           num(valorRevenda) || Math.round(num(valorFipe) * 0.75),
@@ -199,6 +210,7 @@ export default function VeiculoPage() {
 
     atualizar(editandoId, {
       consumo: num(consumo),
+      consumoEtanol: etanolNum > 0 ? etanolNum : undefined,
       valorFipe: num(valorFipe),
       valorRevendaEsperado: num(valorRevenda),
       kmPorMes: num(kmPorMes) || 3000,
@@ -218,6 +230,11 @@ export default function VeiculoPage() {
     setApelido(v.apelido);
     setValorFipe(String(v.valorFipe));
     setConsumo(String(v.consumo).replace('.', ','));
+    setConsumoEtanol(
+      v.consumoEtanol
+        ? String(v.consumoEtanol).replace('.', ',')
+        : String((v.consumo * FATOR_ETANOL).toFixed(1)).replace('.', ','),
+    );
     setValorRevenda(String(v.valorRevendaEsperado));
     setKmPorMes(String(v.kmPorMes));
     setCategoria(v.categoria);
@@ -229,6 +246,7 @@ export default function VeiculoPage() {
   };
 
   const pronto = !!valorFipe && Number(valorFipe.replace(',', '.')) > 0;
+  const aceitaEtanol = combustivel === 'Flex' || combustivel === 'Etanol';
 
   return (
     <div className="space-y-4">
@@ -273,17 +291,24 @@ export default function VeiculoPage() {
                   </Badge>
                 )}
               </div>
-
               <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 <span className="flex items-center gap-1">
                   <Fuel className="h-3 w-3" /> {v.consumo.toFixed(1)} km/l
                   {v.consumoEstimado && ' (est.)'}
                 </span>
+                {v.combustivel === 'Flex' && (
+                  <span>
+                    Etanol{' '}
+                    {(v.consumoEtanol ?? v.consumo * FATOR_ETANOL)
+                      .toFixed(1)
+                      .replace('.', ',')}{' '}
+                    km/l
+                  </span>
+                )}
                 <span>{v.combustivel}</span>
                 <span>FIPE {brl(v.valorFipe)}</span>
                 <span>{v.kmPorMes.toLocaleString('pt-BR')} km/mês</span>
               </div>
-
               <div className="flex gap-2 pt-1">
                 {!ativo && (
                   <Button
@@ -354,7 +379,6 @@ export default function VeiculoPage() {
                     ))}
                   </select>
                 </div>
-
                 <div>
                   <Label className="text-xs">Modelo</Label>
                   <select
@@ -373,7 +397,6 @@ export default function VeiculoPage() {
                     ))}
                   </select>
                 </div>
-
                 <div>
                   <Label className="text-xs">Ano</Label>
                   <select
@@ -392,7 +415,6 @@ export default function VeiculoPage() {
                     ))}
                   </select>
                 </div>
-
                 {consultando && (
                   <p className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -426,7 +448,6 @@ export default function VeiculoPage() {
                   placeholder="Meu carro"
                 />
               </div>
-
               <div>
                 <Label className="text-xs">Categoria</Label>
                 <select
@@ -443,7 +464,6 @@ export default function VeiculoPage() {
                   ))}
                 </select>
               </div>
-
               <div>
                 <Label className="text-xs">Combustível</Label>
                 <select
@@ -469,7 +489,6 @@ export default function VeiculoPage() {
                   ))}
                 </select>
               </div>
-
               <div>
                 <Label className="text-xs">Valor FIPE (R$)</Label>
                 <Input
@@ -479,10 +498,13 @@ export default function VeiculoPage() {
                   placeholder="118000"
                 />
               </div>
-
               <div>
                 <Label className="text-xs">
-                  Consumo (km/l){' '}
+                  Consumo{' '}
+                  {aceitaEtanol && combustivel === 'Flex'
+                    ? '(gasolina) '
+                    : ''}
+                  (km/l){' '}
                   {consumoEstimado && (
                     <Badge variant="secondary" className="ml-1 text-[9px]">
                       estimado
@@ -495,10 +517,35 @@ export default function VeiculoPage() {
                   onChange={(e) => {
                     setConsumo(e.target.value);
                     setConsumoEstimado(false);
+                    // Sincroniza o etanol se ainda não foi editado
+                    const n = Number(e.target.value.replace(',', '.'));
+                    if (n > 0 && !consumoEtanol) {
+                      setConsumoEtanol(
+                        String((n * FATOR_ETANOL).toFixed(1)).replace(
+                          '.',
+                          ',',
+                        ),
+                      );
+                    }
                   }}
                   placeholder="12,5"
                 />
               </div>
+
+              {/* Campo de etanol: só aparece para Flex/Etanol */}
+              {aceitaEtanol && (
+                <div>
+                  <Label className="text-xs">
+                    Consumo com etanol (km/l)
+                  </Label>
+                  <Input
+                    inputMode="decimal"
+                    value={consumoEtanol}
+                    onChange={(e) => setConsumoEtanol(e.target.value)}
+                    placeholder="8,8"
+                  />
+                </div>
+              )}
 
               <div>
                 <Label className="text-xs">Revenda esperada (R$)</Label>
@@ -509,7 +556,6 @@ export default function VeiculoPage() {
                   placeholder="88000"
                 />
               </div>
-
               <div>
                 <Label className="text-xs">Km por mês</Label>
                 <Input
@@ -525,6 +571,14 @@ export default function VeiculoPage() {
               <p className="rounded-md bg-muted/50 p-2 text-[11px] text-muted-foreground">
                 Consumo estimado por modelo/categoria. Se você mediu o consumo
                 real do seu carro, digite acima — o valor deixa de ser estimado.
+              </p>
+            )}
+
+            {aceitaEtanol && consumoEtanol && (
+              <p className="rounded-md bg-muted/50 p-2 text-[11px] text-muted-foreground">
+                O consumo com etanol define o custo real do etanol no cálculo.
+                Se deixar em branco, o app usa 70% do consumo da gasolina
+                (regra de mercado).
               </p>
             )}
 
