@@ -10,6 +10,7 @@ import { calcularServico } from '@/lib/precificacao';
 import {
   litrosDaViagem,
   custoCombustivelViagem,
+  compararCombustiveis,
 } from '@/lib/combustivel';
 import { useClientes } from '@/store/clientes';
 import { useServicos } from '@/store/servicos';
@@ -26,7 +27,11 @@ import {
   type CenarioTransito,
   type RotaCompleta,
 } from '@/lib/rotas';
-import type { EntradaServico, ResultadoServico } from '@/types';
+import type {
+  EntradaServico,
+  ResultadoServico,
+  CombustivelServico,
+} from '@/types';
 import { CampoEndereco } from '@/components/CampoEndereco';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -47,6 +52,8 @@ import {
   Wallet,
   Route,
   MapPin,
+  AlertTriangle,
+  Lightbulb,
 } from 'lucide-react';
 
 const ESPERA_POR_PASSAGEIRO_MIN = 10;
@@ -122,6 +129,8 @@ export default function CalcularPage() {
   const [salvandoServico, setSalvandoServico] = useState(false);
   // Valor manual que o Rodrigo decide cobrar (serviços exclusivos)
   const [valorManual, setValorManual] = useState('');
+  // Combustível usado neste serviço
+  const [combustivel, setCombustivel] = useState<CombustivelServico>('Gasolina');
 
   const top5 = useMemo(() => maisUsados(5), [maisUsados]);
 
@@ -133,10 +142,13 @@ export default function CalcularPage() {
     carregarClientes();
   }, [carregarClientes]);
 
-  // Marca como montado e lê o horário — só no client, após hidratação
+  // Marca como montado, lê o horário e define o combustível padrão
   useEffect(() => {
     setMontado(true);
     setCenario(cenarioPorHorario());
+    // Padrão: o combustível do veículo quando for Etanol; senão Gasolina
+    setCombustivel(veiculo.combustivel === 'Etanol' ? 'Etanol' : 'Gasolina');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const usarGps = async () => {
@@ -216,6 +228,7 @@ export default function CalcularPage() {
       pedagio: parseNum(pedagio),
       estacionamento: parseNum(estacionamento),
       agenciaPercentual: 0,
+      combustivel,
     };
   };
 
@@ -263,6 +276,28 @@ export default function CalcularPage() {
     } finally {
       setCalculando(false);
     }
+  };
+
+  /** Troca o combustível e recalcula na hora se já houver resultado */
+  const trocarCombustivel = (comb: CombustivelServico) => {
+    setCombustivel(comb);
+    setServicoSalvo(false);
+    if (!rotaInfo) return;
+
+    const entrada = montarEntrada(rotaInfo.rota);
+    entrada.combustivel = comb;
+    const manual = parseNum(valorManual);
+
+    setResultado(
+      calcularServico(
+        entrada,
+        veiculo,
+        fixos,
+        variaveis,
+        config,
+        manual > 0 ? manual : undefined,
+      ),
+    );
   };
 
   /** Aplica o valor manual e devolve lucro/margem recalculados na hora */
@@ -323,6 +358,7 @@ export default function CalcularPage() {
       pedagio: parseNum(pedagio),
       estacionamento: parseNum(estacionamento),
       observacoes: null,
+      combustivel,
     });
 
     setSalvandoServico(false);
@@ -355,8 +391,24 @@ export default function CalcularPage() {
     });
 
   const kmViagem = rotaInfo?.rota?.kmTotal ?? 0;
-  const litros = litrosDaViagem(kmViagem, veiculo);
-  const custoComb = custoCombustivelViagem(kmViagem, veiculo, config);
+  const litros = litrosDaViagem(kmViagem, veiculo, combustivel);
+  const custoComb = custoCombustivelViagem(
+    kmViagem,
+    veiculo,
+    config,
+    combustivel,
+  );
+
+  // Comparação gasolina × etanol para o trajeto atual
+  const comparacao = compararCombustiveis(veiculo, config, kmViagem);
+  const escolhidoEhMelhor = comparacao.maisViavel === combustivel;
+  const economiaPerdida = escolhidoEhMelhor
+    ? 0
+    : Math.abs(
+        (combustivel === 'Gasolina'
+          ? comparacao.etanol.custoViagem
+          : comparacao.gasolina.custoViagem) - custoComb,
+      );
 
   const horasServicoNum = Number(horasServico) || 0;
   const horasEsperaNum = Number(horasEspera) || 0;
@@ -380,6 +432,9 @@ export default function CalcularPage() {
     resultado &&
     valorManualNum >= resultado.custoTotal &&
     resultado.margemEfetiva < config.metaMargem;
+
+  const consumoGas = comparacao.gasolina.consumo;
+  const consumoEta = comparacao.etanol.consumo;
 
   return (
     <div className="space-y-4">
@@ -523,17 +578,141 @@ export default function CalcularPage() {
               {previaRota.trechos[2]?.km ?? 0} km
             </span>
             <span>
-              {litrosDaViagem(previaRota.kmTotal, veiculo).toFixed(1)} L ·{' '}
-              {brl(custoCombustivelViagem(previaRota.kmTotal, veiculo, config))}
+              {litrosDaViagem(
+                previaRota.kmTotal,
+                veiculo,
+                combustivel,
+              ).toFixed(1)}{' '}
+              L ·{' '}
+              {brl(
+                custoCombustivelViagem(
+                  previaRota.kmTotal,
+                  veiculo,
+                  config,
+                  combustivel,
+                ),
+              )}
             </span>
           </div>
         </div>
       )}
 
+      {/* ===== COMBUSTÍVEL ===== */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Fuel className="h-4 w-4" /> Combustível deste serviço
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            {/* Gasolina */}
+            <button
+              onClick={() => trocarCombustivel('Gasolina')}
+              className={`rounded-lg border p-3 text-left transition-colors ${
+                combustivel === 'Gasolina'
+                  ? 'border-primary bg-primary/5'
+                  : 'hover:bg-accent'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">Gasolina</span>
+                {comparacao.maisViavel === 'Gasolina' && (
+                  <Check className="h-3.5 w-3.5 text-green-600" />
+                )}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {brl(comparacao.gasolina.preco)}/L ·{' '}
+                {consumoGas.toFixed(1).replace('.', ',')} km/l
+              </p>
+              <p className="mt-0.5 text-sm font-semibold">
+                {brl(comparacao.gasolina.custoKm)}/km
+              </p>
+            </button>
+
+            {/* Etanol */}
+            <button
+              onClick={() => trocarCombustivel('Etanol')}
+              className={`rounded-lg border p-3 text-left transition-colors ${
+                combustivel === 'Etanol'
+                  ? 'border-primary bg-primary/5'
+                  : 'hover:bg-accent'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">
+                  Etanol
+                  {comparacao.baseEstimada && (
+                    <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                      est.
+                    </span>
+                  )}
+                </span>
+                {comparacao.maisViavel === 'Etanol' && (
+                  <Check className="h-3.5 w-3.5 text-green-600" />
+                )}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {brl(comparacao.etanol.preco)}/L ·{' '}
+                {consumoEta.toFixed(1).replace('.', ',')} km/l
+              </p>
+              <p className="mt-0.5 text-sm font-semibold">
+                {brl(comparacao.etanol.custoKm)}/km
+              </p>
+            </button>
+          </div>
+
+          {/* Sugestão */}
+          {kmViagem > 0 && (
+            <div className="rounded-md border border-blue-500/40 bg-blue-500/5 p-2.5">
+              <p className="flex items-start gap-1.5 text-xs">
+                <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-600" />
+                <span>
+                  <strong>{comparacao.maisViavel} compensa</strong> neste
+                  trajeto — {brl(comparacao.economia)} de economia em{' '}
+                  {kmViagem.toFixed(1)} km
+                  {comparacao.baseEstimada && (
+                    <span className="text-muted-foreground">
+                      {' '}
+                      (base: estimativa de 70%)
+                    </span>
+                  )}
+                </span>
+              </p>
+            </div>
+          )}
+
+          {/* Alerta se escolheu o pior */}
+          {!escolhidoEhMelhor && kmViagem > 0 && (
+            <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5">
+              <p className="flex items-start gap-1.5 text-xs font-medium text-amber-700">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  Você escolheu {combustivel}, mas {comparacao.maisViavel} está
+                  mais viável. Diferença de {brl(economiaPerdida)} neste
+                  serviço.
+                </span>
+              </p>
+            </div>
+          )}
+
+          <Separator />
+          <Linha
+            label={`Combustível previsto (${
+              combustivel === 'Etanol'
+                ? litrosDaViagem(kmViagem, veiculo, 'Etanol').toFixed(1)
+                : litros.toFixed(1)
+            } L)`}
+            valor={brl(custoComb)}
+            destaque
+          />
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center justify-between text-base">
-            <span>5. Tempo e extras</span>
+            <span>6. Tempo e extras</span>
             {horasAuto && (
               <Badge variant="secondary" className="text-[10px]">
                 automático
@@ -610,7 +789,7 @@ export default function CalcularPage() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">6. Trânsito previsto</CardTitle>
+          <CardTitle className="text-base">7. Trânsito previsto</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-2">
           {(Object.keys(FATORES_TRANSITO) as CenarioTransito[]).map((k) => (
@@ -632,7 +811,7 @@ export default function CalcularPage() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">7. Cliente do serviço</CardTitle>
+          <CardTitle className="text-base">8. Cliente do serviço</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           <select
@@ -729,16 +908,24 @@ export default function CalcularPage() {
             <CardContent className="space-y-1 text-sm">
               <Linha
                 label={`${litros.toFixed(1)} L × ${brl(
-                  veiculo.combustivel === 'Etanol'
-                    ? config.precoEtanol ?? 4.2
-                    : config.precoGasolina ?? 6.1,
+                  combustivel === 'Etanol'
+                    ? config.precoEtanol
+                    : config.precoGasolina,
                 )}`}
                 valor={brl(custoComb)}
                 destaque
               />
               <Linha
+                label="Combustível selecionado"
+                valor={combustivel}
+              />
+              <Linha
                 label="Consumo do veículo"
-                valor={`${veiculo.consumo > 0 ? veiculo.consumo : 10} km/l`}
+                valor={`${
+                  (combustivel === 'Etanol' ? consumoEta : consumoGas)
+                    .toFixed(1)
+                    .replace('.', ',')
+                } km/l`}
               />
               <p className="pt-1 text-[11px] text-muted-foreground">
                 Valor já incluído no custo por km do cálculo.

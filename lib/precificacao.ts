@@ -36,7 +36,16 @@ export function calcularServico(
   config: Config,
   valorCobrado?: number,
 ): ResultadoServico {
-  const cpk = calcularCPK(veiculo, custosFixos, custosVariaveis, config);
+  // O combustível escolhido no serviço entra no CPK
+  const combustivel = entrada.combustivel ?? 'Gasolina';
+
+  const cpk = calcularCPK(
+    veiculo,
+    custosFixos,
+    custosVariaveis,
+    config,
+    combustivel,
+  );
   const cfh = calcularCFH(custosFixos, config);
 
   const km = kmTotais(entrada);
@@ -78,7 +87,7 @@ export function calcularServico(
   return {
     kmTotais: km,
     horasTotais: horas,
-    custoCombustivel: custoCombustivelKm(veiculo, config) * km,
+    custoCombustivel: custoCombustivelKm(veiculo, config, combustivel) * km,
     custoDepreciacao: custoDepreciacaoKm(veiculo) * km,
     custoManutencao: custosVariaveis.manutencaoPorKm * km,
     custoSeguroImpostos: custoSeguroImpostosKm(custosFixos, veiculo) * km,
@@ -103,8 +112,15 @@ export function breakEvenMensal(
   veiculo: Veiculo,
   custosVariaveis: CustosVariaveis,
   config: Config,
+  combustivel?: 'Gasolina' | 'Etanol',
 ): number {
-  const cpk = calcularCPK(veiculo, custosFixos, custosVariaveis, config);
+  const cpk = calcularCPK(
+    veiculo,
+    custosFixos,
+    custosVariaveis,
+    config,
+    combustivel,
+  );
   const fixos =
     custosFixos.garagem + custosFixos.seguro + custosFixos.ipvaLicenciamento +
     custosFixos.celular + custosFixos.contadorMei + custosFixos.reservaManutencao +

@@ -10,6 +10,9 @@ export type TipoCombustivel =
   | 'GNV'
   | 'Híbrido';
 
+/** Combustível efetivamente usado em um serviço */
+export type CombustivelServico = 'Gasolina' | 'Etanol';
+
 export type AppNavegacao = 'waze' | 'google' | 'perguntar';
 
 export type CategoriaVeiculo =
@@ -43,6 +46,8 @@ export interface Veiculo {
   versao: string;
   combustivel: TipoCombustivel;
   consumo: number;
+  /** Consumo com etanol (km/l). Se ausente, estima consumo × 0,70 */
+  consumoEtanol?: number;
   valorFipe: number;
   valorRevendaEsperado: number;
   kmPrevistosAteRevenda: number;
@@ -101,6 +106,8 @@ export interface EntradaServico {
   pedagio: number;
   estacionamento: number;
   agenciaPercentual: number;
+  /** Combustível usado neste serviço */
+  combustivel: CombustivelServico;
 }
 
 export interface ResultadoServico {
@@ -142,4 +149,25 @@ export interface Cliente {
   email?: string;
   observacoes?: string;
   criadoEm: string;
+}
+
+/** Resultado da comparação gasolina × etanol */
+export interface ComparacaoCombustivel {
+  gasolina: {
+    preco: number;
+    consumo: number;
+    custoKm: number;
+    custoViagem: number;
+  };
+  etanol: {
+    preco: number;
+    consumo: number;
+    custoKm: number;
+    custoViagem: number;
+  };
+  maisViavel: CombustivelServico;
+  economia: number;
+  economiaPercentual: number;
+  /** true se o consumo do etanol foi estimado (não cadastrado) */
+  baseEstimada: boolean;
 }

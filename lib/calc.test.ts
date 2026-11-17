@@ -2,13 +2,20 @@ import { describe, it, expect } from 'vitest';
 import { calcularServico } from './precificacao';
 import { calcularCPK } from './cpk';
 import { calcularCFH } from './cfh';
-import type { Veiculo, CustosFixos, CustosVariaveis, Config, EntradaServico } from '@/types';
+import type {
+  Veiculo,
+  CustosFixos,
+  CustosVariaveis,
+  Config,
+  EntradaServico,
+} from '@/types';
 
 const veiculo: Veiculo = {
   carroId: 'toyota-corolla-2021-20-xei',
   marca: 'Toyota', modelo: 'Corolla', ano: 2021, versao: '2.0 XEi',
   combustivel: 'Flex',
   consumo: 10.5,
+  // consumoEtanol omitido → usa estimativa de 70% (7,35 km/l)
   valorFipe: 118000,
   valorRevendaEsperado: 88000,
   kmPrevistosAteRevenda: 120000,
@@ -37,11 +44,14 @@ const entrada: EntradaServico = {
   kmServico: 22, kmAteEmbarque: 8, kmRetornoBase: 6,
   horasServico: 1.1667, horasEspera: 0.3333, horasDeslocamento: 0.5,
   pedagio: 12, estacionamento: 0, agenciaPercentual: 0,
+  combustivel: 'Gasolina',
 };
 
 describe('Motor de cálculo — exemplo do PRD', () => {
   it('CPK ≈ R$ 1,3942/km', () => {
-    expect(calcularCPK(veiculo, custosFixos, custosVariaveis, config)).toBeCloseTo(1.3942, 3);
+    expect(
+      calcularCPK(veiculo, custosFixos, custosVariaveis, config, 'Gasolina'),
+    ).toBeCloseTo(1.3942, 3);
   });
 
   it('CFH ≈ R$ 13,33/h', () => {
@@ -62,5 +72,40 @@ describe('Motor de cálculo — exemplo do PRD', () => {
     expect(r.lucro).toBeCloseTo(41.14, 0);
     expect(r.margemEfetiva).toBeGreaterThan(0.30);
     expect(r.margemEfetiva).toBeLessThan(0.33);
+  });
+});
+
+describe('Combustível no serviço', () => {
+  it('etanol cadastrado muda o CPK', () => {
+    const comEtanol: Veiculo = { ...veiculo, consumoEtanol: 7.35 };
+    const cpkGas = calcularCPK(veiculo, custosFixos, custosVariaveis, config, 'Gasolina');
+    const cpkEta = calcularCPK(comEtanol, custosFixos, custosVariaveis, config, 'Etanol');
+    // 4,20/7,35 = 0,5714 vs 6,10/10,5 = 0,5810
+    expect(cpkEta).toBeLessThan(cpkGas);
+    expect(cpkEta).toBeCloseTo(cpkGas - 0.0096, 3);
+  });
+
+  it('sem consumoEtanol cadastrado, estima 70% do consumo', () => {
+    // 10,5 × 0,70 = 7,35 → 4,20/7,35 = 0,5714
+    const cpkEta = calcularCPK(veiculo, custosFixos, custosVariaveis, config, 'Etanol');
+    const cpkGasEtanol = calcularCPK(
+      { ...veiculo, consumoEtanol: 7.35 },
+      custosFixos, custosVariaveis, config, 'Etanol',
+    );
+    expect(cpkEta).toBeCloseTo(cpkGasEtanol, 4);
+  });
+
+  it('combustível do serviço altera o custo total', () => {
+    const gas = calcularServico(
+      { ...entrada, combustivel: 'Gasolina' },
+      veiculo, custosFixos, custosVariaveis, config,
+    );
+    const eta = calcularServico(
+      { ...entrada, combustivel: 'Etanol' },
+      veiculo, custosFixos, custosVariaveis, config,
+    );
+    expect(eta.custoTotal).toBeLessThan(gas.custoTotal);
+    // Diferença de combustível em 36 km
+    expect(gas.custoCombustivel - eta.custoCombustivel).toBeCloseTo(0.35, 1);
   });
 });

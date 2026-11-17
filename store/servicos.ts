@@ -9,6 +9,8 @@ type NovoServico = Omit<
   'id' | 'criado_em' | 'data_hora' | 'clientes'
 > & {
   data_hora?: string;
+  /** Combustível usado no serviço — opcional para bases antigas */
+  combustivel?: 'Gasolina' | 'Etanol';
 };
 
 type Estado = {
@@ -46,42 +48,54 @@ export const useServicos = create<Estado>()(
       },
 
       salvar: async (dados) => {
-        const { data, error } = await supabase
+        const base = {
+          data_hora: dados.data_hora ?? new Date().toISOString(),
+          cliente_id: dados.cliente_id,
+          endereco_embarque: dados.endereco_embarque,
+          endereco_destino: dados.endereco_destino,
+          endereco_retorno: dados.endereco_retorno,
+          lat_embarque: dados.lat_embarque,
+          lon_embarque: dados.lon_embarque,
+          lat_destino: dados.lat_destino,
+          lon_destino: dados.lon_destino,
+          lat_retorno: dados.lat_retorno,
+          lon_retorno: dados.lon_retorno,
+          km_total: dados.km_total,
+          horas_servico: dados.horas_servico,
+          horas_espera: dados.horas_espera,
+          cenario_transito: dados.cenario_transito,
+          custo_total: dados.custo_total,
+          preco_cobrado: dados.preco_cobrado,
+          lucro: dados.lucro,
+          margem: dados.margem,
+          pedagio: dados.pedagio,
+          estacionamento: dados.estacionamento,
+          observacoes: dados.observacoes,
+        };
+
+        // 1ª tentativa: com a coluna `combustivel`
+        let resp = await supabase
           .from('servicos')
-          .insert({
-            data_hora: dados.data_hora ?? new Date().toISOString(),
-            cliente_id: dados.cliente_id,
-            endereco_embarque: dados.endereco_embarque,
-            endereco_destino: dados.endereco_destino,
-            endereco_retorno: dados.endereco_retorno,
-            lat_embarque: dados.lat_embarque,
-            lon_embarque: dados.lon_embarque,
-            lat_destino: dados.lat_destino,
-            lon_destino: dados.lon_destino,
-            lat_retorno: dados.lat_retorno,
-            lon_retorno: dados.lon_retorno,
-            km_total: dados.km_total,
-            horas_servico: dados.horas_servico,
-            horas_espera: dados.horas_espera,
-            cenario_transito: dados.cenario_transito,
-            custo_total: dados.custo_total,
-            preco_cobrado: dados.preco_cobrado,
-            lucro: dados.lucro,
-            margem: dados.margem,
-            pedagio: dados.pedagio,
-            estacionamento: dados.estacionamento,
-            observacoes: dados.observacoes,
-          })
+          .insert({ ...base, combustivel: dados.combustivel ?? 'Gasolina' })
           .select('id')
           .single();
 
-        if (error || !data) {
-          set({ erro: error?.message ?? 'Erro ao salvar serviço' });
+        // Fallback: base sem a coluna — salva sem ela
+        if (resp.error && /combustivel/i.test(resp.error.message ?? '')) {
+          resp = await supabase
+            .from('servicos')
+            .insert(base)
+            .select('id')
+            .single();
+        }
+
+        if (resp.error || !resp.data) {
+          set({ erro: resp.error?.message ?? 'Erro ao salvar serviço' });
           return null;
         }
 
         await get().carregar();
-        return data.id as string;
+        return resp.data.id as string;
       },
 
       remover: async (id) => {
